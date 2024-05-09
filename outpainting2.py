@@ -699,12 +699,21 @@ def append_right_side(resized_image, output_image):
     return combined_image
 
 def outpainting(outpaint_input):
-    # Call the function to outpaint the image
+    # Call the function to outpaint the 
+    # Get the last 256 pixels
+    last_256_pixels = outpaint_input.crop((outpaint_input.width - 256, 0, outpaint_input.width, outpaint_input.height))
+    # Create a black image with the remaining size
+    black_part = PIL.Image.new("RGB", (256, outpaint_input.height), (0, 0, 0))
+    # Combine the last 256 pixels and black part into a new image
+    modified_input = PIL.Image.new("RGB", (outpaint_input.width, outpaint_input.height))
+    modified_input.paste(last_256_pixels, (0, 0))
+    modified_input.paste(black_part, (outpaint_input.width - 256, 0))
+
     outpainted_image = generate_image(
         pipe=ov_pipe_inpaint,
         prompt=prompt,
         negative_prompt=negative_prompt,
-        input_image=outpaint_input,
+        input_image=modified_input,
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
         mask_width=mask_width,
@@ -749,30 +758,25 @@ ov_pipe_inpaint = OVStableDiffusionInpaintingPipeline(
 
 
 # Input image (replace with your actual image path)
-input_image = PIL.Image.open("pic8.jpg")
+input_image = PIL.Image.open("pic9.jpg")
 resized_image = input_image.resize((512, 512))
-# Get the last 256 pixels
-last_256_pixels = resized_image.crop((resized_image.width - 256, 0, resized_image.width, resized_image.height))
-# Create a black image with the remaining size
-black_part = PIL.Image.new("RGB", (256, resized_image.height), (0, 0, 0))
-# Combine the last 256 pixels and black part into a new image
-modified_input = PIL.Image.new("RGB", (resized_image.width, resized_image.height))
-modified_input.paste(last_256_pixels, (0, 0))
-modified_input.paste(black_part, (resized_image.width - 256, 0))
+
 
 
 # Prompt describing the desired content for the outpainted area
-prompt = "Extend the original image. No text"
+prompt = "room"
 # Negative prompt (optional, to avoid unwanted elements)
-negative_prompt = "blurry, low-quality, unrealistic, text, symbols"
+negative_prompt = "blurry, low-quality, unrealistic, people:1.5, faces:1.5, hands: 1.5, fingers: 1.5, easynegative, text: 1.5, symbols: 1.5"
 # Other parameters (adjust as needed)
-guidance_scale = 7.5
+guidance_scale = 9
 num_inference_steps = 20
 mask_width = 256  # pixels for mask on the right side
-seed = 8888  # Random seed for reproducibility (optional)
+seed = 315  # Random seed for reproducibility (optional)
 
 
-out1 = outpainting(modified_input)
+out1 = outpainting(resized_image)
 # Display or save the outpainted image
-out1.show()  # Display the output image
-out1.save("outpainted_image.jpg")  # Save the output image
+out2 = outpainting(out1)
+
+out2.show()  # Display the output image
+out2.save("outpainted_image.jpg")  # Save the output image
