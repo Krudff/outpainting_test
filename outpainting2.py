@@ -665,12 +665,12 @@ def generate_image(
 
     return outpainted_image
 
-def append_right_side(resized_image, output_image):
+def append_right_side(orig_image, output_image):
     """
     Appends the right 256 pixels of output_image to the resized_image.
 
     Args:
-        resized_image: The image to which the right side of output_image will be appended.
+        orig_image: The image to which the right side of output_image will be appended.
         output_image: The image from which the right 256 pixels will be extracted.
 
     Returns:
@@ -678,37 +678,36 @@ def append_right_side(resized_image, output_image):
     """
     
     # Check if the images have the same height
-    if resized_image.height != output_image.height:
+    if orig_image.height != output_image.height:
         raise ValueError("Images must have the same height.")
 
-    # Get the width of the resized image
-    resized_width = resized_image.width
+    # Get the width of the original image
+    orig_width = orig_image.width
 
     # Extract the right 256 pixels of output_image
     right_side = output_image.crop((output_image.width - 256, 0, output_image.width, output_image.height))
 
     # Create a new image with the combined width
-    combined_image = PIL.Image.new(resized_image.mode, (resized_width + 256, resized_image.height))
+    combined_image = PIL.Image.new(orig_image.mode, (orig_width + 256, orig_image.height))
 
-    # Paste the resized image to the left side of the combined image
-    combined_image.paste(resized_image, (0, 0))
+    # Paste the original image to the left side of the combined image
+    combined_image.paste(orig_image, (0, 0))
 
     # Paste the right side of the output image to the right side of the combined image
-    combined_image.paste(right_side, (resized_width, 0))
+    combined_image.paste(right_side, (orig_width, 0))
 
     return combined_image
-
-def outpainting(outpaint_input):
-    # Call the function to outpaint the 
-    # Get the last 256 pixels
-    last_256_pixels = outpaint_input.crop((outpaint_input.width - 256, 0, outpaint_input.width, outpaint_input.height))
-    # Create a black image with the remaining size
-    black_part = PIL.Image.new("RGB", (256, outpaint_input.height), (0, 0, 0))
-    # Combine the last 256 pixels and black part into a new image
-    modified_input = PIL.Image.new("RGB", (outpaint_input.width, outpaint_input.height))
+def outpaint_256_right(outpaint_input):
+    last_512_pixels = outpaint_input.crop((outpaint_input.width - 512, 0, outpaint_input.width, outpaint_input.height))
+    
+    last_256_pixels = last_512_pixels.crop((last_512_pixels.width - 256, 0, last_512_pixels.width, last_512_pixels.height))
+    black_part = PIL.Image.new("RGB", (256, last_512_pixels.height), (0, 0, 0))
+  
+    modified_input = PIL.Image.new("RGB", (last_512_pixels.width, last_512_pixels.height))
     modified_input.paste(last_256_pixels, (0, 0))
-    modified_input.paste(black_part, (outpaint_input.width - 256, 0))
-
+    
+    modified_input.paste(black_part, (last_512_pixels.width - 256, 0))
+    
     outpainted_image = generate_image(
         pipe=ov_pipe_inpaint,
         prompt=prompt,
@@ -719,9 +718,26 @@ def outpainting(outpaint_input):
         mask_width=mask_width,
         seed=seed,
     )
-
-    output = append_right_side(resized_image, outpainted_image)
+    
+    output = append_right_side(outpaint_input, outpainted_image)
     return output
+def outpaint(outpaint_input, repetitions=1):
+  """
+  Performs outpainting on the input image by calling outpaint_256_right
+
+  Args:
+      outpaint_input: The input image to be outpainted.
+
+  Returns:
+      The outpainted image.
+  """
+
+  outpainted_image = outpaint_input
+
+  for _ in range(repetitions*2): 
+    outpainted_image = outpaint_256_right(outpainted_image)
+
+  return outpainted_image
 ######## START ##########
 
 core = ov.Core()
@@ -758,7 +774,7 @@ ov_pipe_inpaint = OVStableDiffusionInpaintingPipeline(
 
 
 # Input image (replace with your actual image path)
-input_image = PIL.Image.open("pic9.jpg")
+input_image = PIL.Image.open("pic1.jpg")
 resized_image = input_image.resize((512, 512))
 
 
@@ -769,14 +785,15 @@ prompt = "room"
 negative_prompt = "blurry, low-quality, unrealistic, people:1.5, faces:1.5, hands: 1.5, fingers: 1.5, easynegative, text: 1.5, symbols: 1.5"
 # Other parameters (adjust as needed)
 guidance_scale = 9
-num_inference_steps = 20
+num_inference_steps = 15
 mask_width = 256  # pixels for mask on the right side
 seed = 315  # Random seed for reproducibility (optional)
 
 
-out1 = outpainting(resized_image)
-# Display or save the outpainted image
-out2 = outpainting(out1)
 
-out2.show()  # Display the output image
-out2.save("outpainted_image.jpg")  # Save the output image
+
+# Display or save the outpainted image
+out = outpaint(resized_image,4)
+
+out.show()
+out.save("outpainted_image.jpg")  # Save the output image
