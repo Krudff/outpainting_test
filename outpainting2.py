@@ -4,6 +4,7 @@ from diffusers import StableDiffusionInpaintPipeline, DPMSolverMultistepSchedule
 model_id_inpaint = "stabilityai/stable-diffusion-2-inpainting"
 
 pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(model_id_inpaint)
+pipe_inpaint.load_lora_weights("donutglazed/dsp-finetuned-lora", weight_name="pytorch_lora_weights.safetensors")
 scheduler_inpaint = DPMSolverMultistepScheduler.from_config(pipe_inpaint.scheduler.config)
 
 
@@ -26,7 +27,7 @@ import torch
 import numpy as np
 import openvino as ov
 
-sd2_inpainting_model_dir = Path("sd2_inpainting")
+sd2_inpainting_model_dir = Path("dsp-inpainting")
 sd2_inpainting_model_dir.mkdir(exist_ok=True)
 
 def cleanup_torchscript_cache():
@@ -774,26 +775,26 @@ ov_pipe_inpaint = OVStableDiffusionInpaintingPipeline(
 
 
 # Input image (replace with your actual image path)
-input_image = PIL.Image.open("pic1.jpg")
+input_image = PIL.Image.open("picture.jpg")
 resized_image = input_image.resize((512, 512))
 
 
 
 # Prompt describing the desired content for the outpainted area
-prompt = "room"
+prompt = "interior of dsp room, inpainting, consistent, maintain color scheme"
 # Negative prompt (optional, to avoid unwanted elements)
-negative_prompt = "blurry, low-quality, unrealistic, people:1.5, faces:1.5, hands: 1.5, fingers: 1.5, easynegative, text: 1.5, symbols: 1.5"
+negative_prompt = "blurry, bad quality, poor coloring, abstract art, random objects, error, disfigured, gross proportions, low quality, jpeg, mutated, text, signature, watermark, worst quality, collage, pixel, pixelated, grainy"
 # Other parameters (adjust as needed)
-guidance_scale = 9
-num_inference_steps = 15
+guidance_scale = 20
+num_inference_steps = 25
 mask_width = 256  # pixels for mask on the right side
-seed = 315  # Random seed for reproducibility (optional)
+seed = 3682  # Random seed for reproducibility (optional)
 
 
 
 
 # Display or save the outpainted image
-out = outpaint(resized_image,4)
+out = outpaint(resized_image,1)
 
 out.show()
 out.save("outpainted_image.jpg")  # Save the output image
