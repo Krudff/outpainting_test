@@ -1,10 +1,12 @@
 # Stable Diffusion in Diffusers library
-from diffusers import StableDiffusionInpaintPipeline, DPMSolverMultistepScheduler
+from diffusers import StableDiffusionInpaintPipeline, DPMSolverMultistepScheduler, UNet2DConditionModel
 
 model_id_inpaint = "stabilityai/stable-diffusion-2-inpainting"
 
-pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(model_id_inpaint)
+pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(model_id_inpaint,variant = "fp16")
+
 pipe_inpaint.load_lora_weights("donutglazed/dsp-finetuned-lora", weight_name="pytorch_lora_weights.safetensors")
+pipe_inpaint.fuse_lora(lora_scale=1)
 scheduler_inpaint = DPMSolverMultistepScheduler.from_config(pipe_inpaint.scheduler.config)
 
 
@@ -18,7 +20,7 @@ vae_inpaint = pipe_inpaint.vae
 vae_inpaint.eval()
 
 del pipe_inpaint
-gc.collect();
+gc.collect()
 
 # Convert models to OpenVINO Intermediate representation (IR) format
 
@@ -618,6 +620,7 @@ def generate_image(
     num_inference_steps: int = 20,
     mask_width: int = 20,  # Changed mask_width to 20
     seed: int = 9999,
+    side: int = 1,
 ):
     """
     Outpaint a single image with input image, with mask only on the right side
@@ -635,6 +638,7 @@ def generate_image(
         num_inference_steps (int, *optional*, defaults to 50): The number of denoising steps for each frame. More denoising steps usually lead to a higher quality image at the expense of slower inference.
         mask_width (int, *optional*, 21): size of border mask for inpainting on each step (modified to 21).
         seed (int, *optional*, None): Seed for random generator state initialization.
+        side (int): 0 for left, 1 for right
     Returns:
         PIL.Image.Image: The outpainted image.
     """
@@ -644,10 +648,16 @@ def generate_image(
 
     current_image = input_image
 
-    # Create mask only on the right side
-    mask_image = PIL.Image.new("RGB", size=(width, height), color=(255,255,255))
-    mask_image.paste(PIL.Image.new("RGB", size=(width - mask_width, height)), (0, 0))
-    mask_image = mask_image.convert("RGBA")
+    if(side == 1):
+        # Create mask only on the right side
+        mask_image = PIL.Image.new("RGB", size=(width, height), color=(255,255,255))
+        mask_image.paste(PIL.Image.new("RGB", size=(width - mask_width, height)), (0, 0))
+        mask_image = mask_image.convert("RGBA")
+    else:
+        # Create mask only on the left side
+        mask_image = PIL.Image.new("RGB", size=(width, height), color=(255,255,255))
+        mask_image.paste(PIL.Image.new("RGB", size=(width - mask_width, height)), (256, 0))
+        mask_image = mask_image.convert("RGBA")
 
     pipe.set_progress_bar_config(desc="Generating outpainted image...")
     images = pipe(
@@ -665,6 +675,88 @@ def generate_image(
     # No need for image grid or video generation/saving as we only need one outpainted image
 
     return outpainted_image
+
+def append_left_side(orig_image, output_image):
+    """
+    Appends the left 256 pixels of output_image to the resized_image.
+
+    Args:
+        orig_image: The image to which the left side of output_image will be appended.
+        output_image: The image from which the left 256 pixels will be extracted.
+
+    Returns:
+        The combined image with the appended left side.
+    """
+
+    # Check if the images have the same height
+    if orig_image.height != output_image.height:
+        raise ValueError("Images must have the same height.")
+
+    # Get the width of the original image
+    orig_width = orig_image.width
+
+    # Extract the left 256 pixels of output_image
+    left_side = output_image.crop((0, 0, 256, output_image.height))
+
+    # Create a new image with the combined width
+    combined_image = PIL.Image.new(orig_image.mode, (orig_width + 256, orig_image.height))
+
+    # Paste the left side of the output image to the left side of the combined image
+    combined_image.paste(left_side, (0, 0))
+
+    # Paste the original image to the right side of the combined image
+    combined_image.paste(orig_image, (256, 0))
+
+    return combined_image
+
+
+def outpaint_256_left(outpaint_input,right_side):
+    """
+    This function takes an image and outpaints the left side using a pre-trained inpainting model.
+
+    Args:
+        outpaint_input: The input image as a PIL Image object.
+
+    Returns:
+        A new PIL Image object with the outpainted region on the right side.
+    """
+
+    # Crop the first 512 pixels from the left side of the input image
+    first_512_pixels = outpaint_input.crop((0, 0, 512, outpaint_input.height))
+
+    # Crop the first 256 pixels from the left side of the last_512_pixels
+    first_256_pixels = first_512_pixels.crop((0, 0, first_512_pixels.width, first_512_pixels.height))
+
+    # Create a black image with width 256 and same height as first_512_pixels to represent the region to be inpainted
+    black_part = PIL.Image.new("RGB", (256, first_512_pixels.height), (0, 0, 0))
+
+    # Create a new image to hold the modified input for inpainting
+    modified_input = PIL.Image.new("RGB", (first_512_pixels.width, first_512_pixels.height))
+
+    # Paste the black image onto the left side of the modified_input, creating the inpainting region
+    modified_input.paste(black_part, (0, 0))
+
+    # Paste the first 256 pixels of the original image onto the right side of the modified_input
+    modified_input.paste(first_256_pixels, (256, 0))
+
+    # Outpaint the black region using the inpainting model (function likely not shown here)
+    outpainted_image = generate_image(
+        pipe=ov_pipe_inpaint,  # Assuming this is the inpainting model
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        input_image=modified_input,
+        guidance_scale=guidance_scale,
+        num_inference_steps=num_inference_steps,
+        mask_width=mask_width,
+        seed=seed,
+        side=right_side,
+    )
+
+    # Append the outpainted image to the right side of the original image (function likely not shown here)
+    output = append_left_side(outpaint_input, outpainted_image)
+
+    # Return the final image with the outpainted region
+    return output
 
 def append_right_side(orig_image, output_image):
     """
@@ -698,19 +790,38 @@ def append_right_side(orig_image, output_image):
     combined_image.paste(right_side, (orig_width, 0))
 
     return combined_image
-def outpaint_256_right(outpaint_input):
+def outpaint_256_right(outpaint_input,right_side):
+    """
+    This function takes an image and outpaints the right side using a pre-trained inpainting model.
+
+    Args:
+        outpaint_input: The input image as a PIL Image object.
+
+    Returns:
+        A new PIL Image object with the outpainted region on the right side.
+    """
+
+    # Crop the last 512 pixels from the right side of the input image
     last_512_pixels = outpaint_input.crop((outpaint_input.width - 512, 0, outpaint_input.width, outpaint_input.height))
-    
+
+    # Crop the last 256 pixels from the right side of the last_512_pixels
     last_256_pixels = last_512_pixels.crop((last_512_pixels.width - 256, 0, last_512_pixels.width, last_512_pixels.height))
+
+    # Create a black image with width 256 and same height as last_512_pixels to represent the region to be inpainted
     black_part = PIL.Image.new("RGB", (256, last_512_pixels.height), (0, 0, 0))
-  
+
+    # Create a new image to hold the modified input for inpainting
     modified_input = PIL.Image.new("RGB", (last_512_pixels.width, last_512_pixels.height))
+
+    # Paste the last 256 pixels of the original image onto the left side of the modified_input
     modified_input.paste(last_256_pixels, (0, 0))
-    
+
+    # Paste the black image onto the right side of the modified_input, creating the inpainting region
     modified_input.paste(black_part, (last_512_pixels.width - 256, 0))
-    
+
+    # Outpaint the black region using the inpainting model (function likely not shown here)
     outpainted_image = generate_image(
-        pipe=ov_pipe_inpaint,
+        pipe=ov_pipe_inpaint,  # Assuming this is the inpainting model
         prompt=prompt,
         negative_prompt=negative_prompt,
         input_image=modified_input,
@@ -718,27 +829,35 @@ def outpaint_256_right(outpaint_input):
         num_inference_steps=num_inference_steps,
         mask_width=mask_width,
         seed=seed,
+        side=right_side,
     )
-    
+
+    # Append the outpainted image to the right side of the original image (function likely not shown here)
     output = append_right_side(outpaint_input, outpainted_image)
+
+    # Return the final image with the outpainted region
     return output
-def outpaint(outpaint_input, repetitions=1):
-  """
-  Performs outpainting on the input image by calling outpaint_256_right
 
-  Args:
-      outpaint_input: The input image to be outpainted.
+def outpaint(outpaint_input, repetitions=1, right_side=1):
+    """
+    Performs outpainting on the input image by calling outpaint_256_right
 
-  Returns:
-      The outpainted image.
-  """
+    Args:
+        outpaint_input: The input image to be outpainted.
 
-  outpainted_image = outpaint_input
+    Returns:
+        The outpainted image.
+    """
 
-  for _ in range(repetitions*2): 
-    outpainted_image = outpaint_256_right(outpainted_image)
+    outpainted_image = outpaint_input
 
-  return outpainted_image
+    for _ in range(repetitions*2): 
+        if(right_side):
+            outpainted_image = outpaint_256_right(outpainted_image,right_side)
+        else:
+            outpainted_image = outpaint_256_left(outpainted_image,right_side)
+
+    return outpainted_image
 ######## START ##########
 
 core = ov.Core()
@@ -781,20 +900,20 @@ resized_image = input_image.resize((512, 512))
 
 
 # Prompt describing the desired content for the outpainted area
-prompt = "interior of dsp room, inpainting, consistent, maintain color scheme"
+prompt = "dsp room interior, good quality, even lighting, consistent wall color"
 # Negative prompt (optional, to avoid unwanted elements)
-negative_prompt = "blurry, bad quality, poor coloring, abstract art, random objects, error, disfigured, gross proportions, low quality, jpeg, mutated, text, signature, watermark, worst quality, collage, pixel, pixelated, grainy"
+negative_prompt = "blurry, overexposure, uneven lighting, color bleeding, text, distorted details, asymmetrical, multiple angles, multiple views, deformed objects"
 # Other parameters (adjust as needed)
 guidance_scale = 20
 num_inference_steps = 25
 mask_width = 256  # pixels for mask on the right side
-seed = 3682  # Random seed for reproducibility (optional)
+seed = 42  # Random seed for reproducibility (optional)
 
 
 
 
 # Display or save the outpainted image
-out = outpaint(resized_image,1)
+out = outpaint(resized_image,1,1)#3rd input is left side if 0 and right side if 1
 
 out.show()
 out.save("outpainted_image.jpg")  # Save the output image
